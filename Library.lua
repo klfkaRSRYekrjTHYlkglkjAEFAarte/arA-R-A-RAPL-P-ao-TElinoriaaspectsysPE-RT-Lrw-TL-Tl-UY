@@ -7,10 +7,10 @@
 
 
 
-print("v5.1.8")
 
+print("v5.1.9")
 local BASE_URL = "https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/Library.lua"
-local VERSION = "5.1.8"
+local VERSION = "5.1.9"
 
 local env = (type(getgenv) == "function" and getgenv()) or (type(shared) == "table" and shared) or {}
 local Previous = rawget(env, "LinoriaPlus")
@@ -55,8 +55,30 @@ local InputService = game:GetService("UserInputService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
-\ndo
+
+do
+    Library.Signals = type(Library.Signals) == "table" and Library.Signals or {}
+    if type(Library.GiveSignal) ~= "function" then
+        function Library:GiveSignal(signal)
+            if signal and type(signal.Disconnect) == "function" then
+                table.insert(self.Signals, signal)
+            end
+            return signal
+        end
+    end
+
+    local activeDrag = nil
     local dragStates = setmetatable({}, { __mode = "k" })
+
+    local function stopDrag(state)
+        if not state then
+            return
+        end
+        state.dragging = false
+        if activeDrag == state then
+            activeDrag = nil
+        end
+    end
 
     Library.MakeDraggable = function(instance, cutoff)
         if not instance or not instance:IsA("GuiObject") then
@@ -64,26 +86,20 @@ local LocalPlayer = Players.LocalPlayer
         end
 
         local previous = dragStates[instance]
-        if previous then
-            if previous.began then
-                previous.began:Disconnect()
-            end
-            if previous.changed then
-                previous.changed:Disconnect()
-            end
-            if previous.ended then
-                previous.ended:Disconnect()
-            end
+        if previous and previous.began then
+            previous.began:Disconnect()
+            previous.began = nil
         end
 
         instance.Active = true
 
         local state = {
+            instance = instance,
             dragging = false,
-            offset = Vector2.new(0, 0),
+            startInput = nil,
+            startPosition = nil,
+            cutoff = tonumber(cutoff) or 40,
             began = nil,
-            changed = nil,
-            ended = nil,
         }
 
         dragStates[instance] = state
@@ -93,52 +109,55 @@ local LocalPlayer = Players.LocalPlayer
                 return
             end
 
-            local position = input.Position
-            local absolute = instance.AbsolutePosition
-            local localY = position.Y - absolute.Y
-            local limit = tonumber(cutoff) or 40
-
-            if localY > limit then
+            local localY = input.Position.Y - instance.AbsolutePosition.Y
+            if localY > state.cutoff then
                 return
+            end
+
+            if activeDrag and activeDrag ~= state then
+                stopDrag(activeDrag)
             end
 
             state.dragging = true
-            state.offset = Vector2.new(
-                position.X - absolute.X,
-                position.Y - absolute.Y
-            )
-        end)
-
-        state.changed = InputService.InputChanged:Connect(function(input)
-            if not state.dragging then
-                return
-            end
-
-            if input.UserInputType ~= Enum.UserInputType.MouseMovement then
-                return
-            end
-
-            if not instance.Parent then
-                state.dragging = false
-                return
-            end
-
-            local position = input.Position
-            local size = instance.AbsoluteSize
-            local anchor = instance.AnchorPoint
-
-            instance.Position = UDim2.fromOffset(
-                position.X - state.offset.X + (size.X * anchor.X),
-                position.Y - state.offset.Y + (size.Y * anchor.Y)
-            )
-        end)
-
-        state.ended = InputService.InputEnded:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.MouseButton1 then
-                state.dragging = false
-            end
+            state.startInput = input.Position
+            state.startPosition = instance.Position
+            activeDrag = state
         end)
     end
+
+    local dragChanged = InputService.InputChanged:Connect(function(input)
+        local state = activeDrag
+        if not state or not state.dragging then
+            return
+        end
+        if input.UserInputType ~= Enum.UserInputType.MouseMovement then
+            return
+        end
+
+        local instance = state.instance
+        if not instance or not instance.Parent then
+            stopDrag(state)
+            return
+        end
+
+        local delta = input.Position - state.startInput
+        local start = state.startPosition
+        instance.Position = UDim2.new(
+            start.X.Scale,
+            start.X.Offset + delta.X,
+            start.Y.Scale,
+            start.Y.Offset + delta.Y
+        )
+    end)
+
+    local dragEnded = InputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            stopDrag(activeDrag)
+        end
+    end)
+
+    Library:GiveSignal(dragChanged)
+    Library:GiveSignal(dragEnded)
 end
 
 Library.__AspectSysLinoriaPlusVersion = VERSION
