@@ -1,16 +1,16 @@
---[[
-    aspect.sys LinoriaPlus
 
-    Base: official LinoriaLib
-    Compatibility layer: only documented Obsidian-style helpers.
 
-    Linoria remains the renderer and native control implementation.
-    addons/ThemeManager.lua and addons/SaveManager.lua are local compatibility
-    managers that use this bridge without fetching external source at runtime.
-]]
+
+
+
+
+
+
+
+print("v5.1.8")
 
 local BASE_URL = "https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/Library.lua"
-local VERSION = "5.1.9"
+local VERSION = "5.1.8"
 
 local env = (type(getgenv) == "function" and getgenv()) or (type(shared) == "table" and shared) or {}
 local Previous = rawget(env, "LinoriaPlus")
@@ -23,138 +23,6 @@ if Previous and type(Previous.Unload) == "function" then
     pcall(function()
         Previous:Unload()
     end)
-end
-
-local function patchLinoriaDrag(source)
-    if type(source) ~= "string" or source == "" then
-        return source
-    end
-
-    local replacement = [[function Library:MakeDraggable(Instance, Cutoff)
-    if not Instance or not Instance:IsA("GuiObject") then
-        return Instance
-    end
-
-    Instance.Active = true
-
-    if not Library.__AspectSysDragState then
-        local state = {
-            Instance = nil,
-            StartInput = nil,
-            StartPosition = nil,
-            Cutoff = 40,
-            Dragging = false,
-        }
-
-        Library.__AspectSysDragState = state
-
-        local changed = InputService.InputChanged:Connect(function(Input)
-            local current = Library.__AspectSysDragState
-            if not current or not current.Dragging then
-                return
-            end
-
-            local instance = current.Instance
-            if not instance or not instance.Parent then
-                current.Instance = nil
-                current.StartInput = nil
-                current.StartPosition = nil
-                current.Dragging = false
-                return
-            end
-
-            if Input.UserInputType ~= Enum.UserInputType.MouseMovement
-                and Input.UserInputType ~= Enum.UserInputType.Touch then
-                return
-            end
-
-            local startInput = current.StartInput
-            local startPosition = current.StartPosition
-            if not startInput or not startPosition then
-                return
-            end
-
-            local delta = Input.Position - startInput
-            instance.Position = UDim2.new(
-                startPosition.X.Scale,
-                startPosition.X.Offset + delta.X,
-                startPosition.Y.Scale,
-                startPosition.Y.Offset + delta.Y
-            )
-        end)
-
-        local ended = InputService.InputEnded:Connect(function(Input)
-            if Input.UserInputType ~= Enum.UserInputType.MouseButton1
-                and Input.UserInputType ~= Enum.UserInputType.Touch then
-                return
-            end
-
-            local current = Library.__AspectSysDragState
-            if current then
-                current.Instance = nil
-                current.StartInput = nil
-                current.StartPosition = nil
-                current.Dragging = false
-            end
-        end)
-
-        if type(Library.GiveSignal) == "function" then
-            Library:GiveSignal(changed)
-            Library:GiveSignal(ended)
-        end
-    end
-
-    local cutoff = tonumber(Cutoff) or 40
-    local dragConnections = Library.__AspectSysDragConnections
-    if not dragConnections then
-        dragConnections = setmetatable({}, { __mode = "k" })
-        Library.__AspectSysDragConnections = dragConnections
-    end
-
-    local oldConnection = dragConnections[Instance]
-    if oldConnection and type(oldConnection.Disconnect) == "function" then
-        pcall(function() oldConnection:Disconnect() end)
-    end
-
-    local beginConnection = Instance.InputBegan:Connect(function(Input)
-        if Input.UserInputType ~= Enum.UserInputType.MouseButton1
-            and Input.UserInputType ~= Enum.UserInputType.Touch then
-            return
-        end
-
-        if not Instance.Parent then
-            return
-        end
-
-        local localY = Input.Position.Y - Instance.AbsolutePosition.Y
-        if localY > cutoff then
-            return
-        end
-
-        local current = Library.__AspectSysDragState
-        current.Instance = Instance
-        current.StartInput = Input.Position
-        current.StartPosition = Instance.Position
-        current.Cutoff = cutoff
-        current.Dragging = true
-    end)
-
-    dragConnections[Instance] = beginConnection
-
-    if type(Library.GiveSignal) == "function" then
-        Library:GiveSignal(beginConnection)
-    end
-
-    return Instance
-end]]
-
-    local pattern = "function Library:MakeDraggable%([^\n]*%)\n.-\nend\n\nfunction Library:AddToolTip"
-    local patched, count = string.gsub(source, pattern, replacement .. "\n\nfunction Library:AddToolTip", 1)
-    if count == 1 then
-        return patched
-    end
-
-    return source
 end
 
 local function loadSource(url, name)
@@ -172,10 +40,6 @@ local function loadSource(url, name)
         end)
     end
 
-    if name == "LinoriaLib" then
-        source = patchLinoriaDrag(source)
-    end
-
     local chunk, compileError = loadstring(source)
     assert(chunk, "LinoriaPlus: " .. tostring(name) .. " compile error: " .. tostring(compileError))
 
@@ -191,21 +55,125 @@ local InputService = game:GetService("UserInputService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
+\ndo
+    local dragStates = setmetatable({}, { __mode = "k" })
+
+    Library.MakeDraggable = function(instance, cutoff)
+        if not instance or not instance:IsA("GuiObject") then
+            return
+        end
+
+        local previous = dragStates[instance]
+        if previous then
+            if previous.began then
+                previous.began:Disconnect()
+            end
+            if previous.changed then
+                previous.changed:Disconnect()
+            end
+            if previous.ended then
+                previous.ended:Disconnect()
+            end
+        end
+
+        instance.Active = true
+
+        local state = {
+            dragging = false,
+            offset = Vector2.new(0, 0),
+            began = nil,
+            changed = nil,
+            ended = nil,
+        }
+
+        dragStates[instance] = state
+
+        state.began = instance.InputBegan:Connect(function(input)
+            if input.UserInputType ~= Enum.UserInputType.MouseButton1 then
+                return
+            end
+
+            local position = input.Position
+            local absolute = instance.AbsolutePosition
+            local localY = position.Y - absolute.Y
+            local limit = tonumber(cutoff) or 40
+
+            if localY > limit then
+                return
+            end
+
+            state.dragging = true
+            state.offset = Vector2.new(
+                position.X - absolute.X,
+                position.Y - absolute.Y
+            )
+        end)
+
+        state.changed = InputService.InputChanged:Connect(function(input)
+            if not state.dragging then
+                return
+            end
+
+            if input.UserInputType ~= Enum.UserInputType.MouseMovement then
+                return
+            end
+
+            if not instance.Parent then
+                state.dragging = false
+                return
+            end
+
+            local position = input.Position
+            local size = instance.AbsoluteSize
+            local anchor = instance.AnchorPoint
+
+            instance.Position = UDim2.fromOffset(
+                position.X - state.offset.X + (size.X * anchor.X),
+                position.Y - state.offset.Y + (size.Y * anchor.Y)
+            )
+        end)
+
+        state.ended = InputService.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 then
+                state.dragging = false
+            end
+        end)
+    end
+end
 
 Library.__AspectSysLinoriaPlusVersion = VERSION
 Library.__AspectSysLinoriaPlusBase = "LinoriaLib"
 Library.__AspectSysLinoriaBase = "LinoriaLib"
 Library.LocalPlayer = Library.LocalPlayer or LocalPlayer
 
--- Linoria owns these tables. Reuse them instead of creating a second registry.
+
+
+
+local DEFAULT_ASPECT_THEME = {
+    FontColor = Color3.fromRGB(214, 214, 214),
+    MainColor = Color3.fromRGB(20, 20, 20),
+    AccentColor = Color3.fromRGB(214, 214, 214),
+    BackgroundColor = Color3.fromRGB(15, 15, 15),
+    OutlineColor = Color3.fromRGB(31, 31, 31),
+    Font = Enum.Font.Code,
+    BackgroundImage = "",
+}
+
+Library.Scheme = Library.Scheme or {}
+for key, value in pairs(DEFAULT_ASPECT_THEME) do
+    Library.Scheme[key] = value
+    Library[key] = value
+end
+
+
 env.Options = Library.Options or env.Options or {}
 env.Toggles = Library.Toggles or env.Toggles or {}
 Library.Options = env.Options
 Library.Toggles = env.Toggles
 
--- Defensive wrappers around a few Linoria primitives. These are intentionally
--- small: the upstream renderer still owns the real implementations, but a bad
--- nil/custom object must not bring down a large script during UI construction.
+
+
+
 do
     local originalCreate = Library.Create
     if type(originalCreate) == "function" and not Library.__AspectSysCreateHardened then
@@ -383,18 +351,22 @@ local function install(object, name, method)
     end
 
     if type(object[name]) == "function" then
-        return false
+        return true
     end
 
-    pcall(function()
-        object[name] = method
+    local installed = pcall(function()
+        rawset(object, name, method)
     end)
+
+    if installed and type(object[name]) == "function" then
+        return true
+    end
 
     local mt = getmetatable(object)
     local index = mt and mt.__index
     if type(index) == "table" and type(index[name]) ~= "function" then
         pcall(function()
-            index[name] = method
+            rawset(index, name, method)
         end)
     end
 
@@ -420,13 +392,13 @@ local function removeFromElements(groupbox, element)
     end
 end
 
----------------------------------------------------------------------
--- Dependency boxes.
---
--- Some Linoria releases document AddDependencyBox/SetupDependencies in their
--- example but do not ship the helper in Library.lua. LinoriaPlus provides the
--- helper locally and keeps it compatible with normal groupbox controls.
----------------------------------------------------------------------
+
+
+
+
+
+
+
 
 Library.DependencyBoxes = type(Library.DependencyBoxes) == "table" and Library.DependencyBoxes or {}
 
@@ -644,9 +616,9 @@ local function installDependencyBox(groupbox)
             end
         end))
 
-        -- Dependency boxes are themselves valid groupboxes. Install the same
-        -- helper recursively so nested dependency boxes work instead of
-        -- stopping script execution with an `AddDependencyBox` nil-call.
+        
+        
+        
         installDependencyBox(depbox)
 
         table.insert(self.DependencyBoxes, depbox)
@@ -659,23 +631,27 @@ local function installDependencyBox(groupbox)
     return groupbox
 end
 
----------------------------------------------------------------------
--- Linoria theme bridge for the official Obsidian ThemeManager.
----------------------------------------------------------------------
+
+
+
 
 local originalUpdateColors = Library.UpdateColorsUsingRegistry
 local originalSetFont = Library.SetFont
 local originalSetBackgroundImage = Library.SetBackgroundImage
 
-Library.Scheme = Library.Scheme or {
-    FontColor = Library.FontColor,
-    MainColor = Library.MainColor,
-    AccentColor = Library.AccentColor,
-    BackgroundColor = Library.BackgroundColor,
-    OutlineColor = Library.OutlineColor,
-    Font = Library.Font,
-    BackgroundImage = "",
-}
+Library.Scheme = Library.Scheme or {}
+Library.Scheme.FontColor = Library.Scheme.FontColor or Color3.fromRGB(214, 214, 214)
+Library.Scheme.MainColor = Library.Scheme.MainColor or Color3.fromRGB(20, 20, 20)
+Library.Scheme.AccentColor = Library.Scheme.AccentColor or Color3.fromRGB(214, 214, 214)
+Library.Scheme.BackgroundColor = Library.Scheme.BackgroundColor or Color3.fromRGB(15, 15, 15)
+Library.Scheme.OutlineColor = Library.Scheme.OutlineColor or Color3.fromRGB(31, 31, 31)
+Library.Scheme.Font = Library.Scheme.Font or Enum.Font.Code
+Library.Scheme.BackgroundImage = Library.Scheme.BackgroundImage or ""
+
+for _, key in ipairs({ "FontColor", "MainColor", "AccentColor", "BackgroundColor", "OutlineColor" }) do
+    Library[key] = Library.Scheme[key]
+end
+Library.Font = Library.Scheme.Font
 
 local function syncSchemeToLinoria()
     local scheme = Library.Scheme or {}
@@ -762,9 +738,9 @@ end
 
 syncSchemeToLinoria()
 
----------------------------------------------------------------------
--- Groupbox media helpers.
----------------------------------------------------------------------
+
+
+
 
 local function addImage(groupbox, index, info)
     info = type(info) == "table" and info or {}
@@ -1317,9 +1293,9 @@ local function addUIPassthrough(groupbox, index, info)
     return object
 end
 
----------------------------------------------------------------------
--- Groupbox / tab compatibility.
----------------------------------------------------------------------
+
+
+
 
 local augmentGroupbox
 local augmentTabbox
@@ -1513,8 +1489,7 @@ augmentTab = function(tab)
         tab[methodName] = function(self, ...)
             local groupbox = original(self, ...)
             if type(groupbox) == "table" then
-                augmentGroupbox(groupbox)
-                normalizeGroupboxVisualState(groupbox)
+                pcall(function() augmentGroupbox(groupbox) end)
             end
             return groupbox
         end
@@ -1614,9 +1589,107 @@ augmentTab = function(tab)
     return tab
 end
 
----------------------------------------------------------------------
--- Window compatibility. Existing Linoria methods remain authoritative.
----------------------------------------------------------------------
+
+
+
+
+local function findWindowTitleLabel(window)
+    if type(window) ~= "table" or not window.Holder then
+        return nil
+    end
+
+    local holder = window.Holder
+    local candidates = {}
+    for _, child in ipairs(holder:GetDescendants()) do
+        if child:IsA("TextLabel") and child.Visible ~= false then
+            local pos = child.Position
+            local size = child.Size
+            if pos.Y.Scale == 0 and pos.Y.Offset <= 2 and size.Y.Scale == 0 and size.Y.Offset >= 20 and size.Y.Offset <= 30 then
+                table.insert(candidates, child)
+            end
+        end
+    end
+
+    table.sort(candidates, function(a, b)
+        return a.AbsolutePosition.Y < b.AbsolutePosition.Y
+    end)
+    return candidates[1]
+end
+
+local function centerWindowTitle(window, label)
+    if not label or not label.Parent then
+        return
+    end
+
+    label.AnchorPoint = Vector2.new(0.5, 0)
+    label.Position = UDim2.new(0.5, 0, 0, 0)
+    label.Size = UDim2.new(1, -24, 0, 25)
+    label.TextXAlignment = Enum.TextXAlignment.Center
+    label.ZIndex = 2
+    window.__AspectSysTitleLabel = label
+end
+
+local function fitNativeTabFrame(tabFrame)
+    if not tabFrame or not tabFrame.Parent then
+        return
+    end
+
+    local height = math.max(1, tabFrame.AbsoluteSize.Y - 14)
+    local sideCount = 0
+    for _, child in ipairs(tabFrame:GetChildren()) do
+        if child:IsA("ScrollingFrame") then
+            sideCount = sideCount + 1
+            child.Size = UDim2.new(0.5, -10, 0, height)
+            child.Position = sideCount == 1
+                and UDim2.new(0, 7, 0, 7)
+                or UDim2.new(0.5, 3, 0, 7)
+        end
+    end
+end
+
+local function fitNativeTabScrollers(window)
+    if type(window) ~= "table" or not window.Holder then
+        return
+    end
+
+    for _, child in ipairs(window.Holder:GetDescendants()) do
+        if child:IsA("Frame") and child.Name == "TabFrame" then
+            fitNativeTabFrame(child)
+        end
+    end
+end
+
+local function hookTabFrameSizing(window)
+    if type(window) ~= "table" or not window.Holder then
+        return
+    end
+    if window.__AspectSysTabSizingHooked then
+        fitNativeTabScrollers(window)
+        return
+    end
+
+    window.__AspectSysTabSizingHooked = true
+    fitNativeTabScrollers(window)
+
+    local mainSection = nil
+    for _, child in ipairs(window.Holder:GetDescendants()) do
+        if child:IsA("Frame") and child.Name == "TabContainer" then
+            mainSection = child
+            break
+        end
+    end
+
+    if mainSection then
+        giveSignal(mainSection:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+            fitNativeTabScrollers(window)
+        end))
+    else
+        
+        
+        
+        
+    end
+end
 
 local function augmentWindow(window)
     if type(window) ~= "table" then
@@ -1995,6 +2068,24 @@ local function augmentWindow(window)
         end)
     end
 
+    if type(window.CenterTitle) ~= "function" then
+        install(window, "CenterTitle", function(self, centered)
+            local label = self.__AspectSysTitleLabel or findWindowTitleLabel(self)
+            if not label then
+                return self
+            end
+            if centered == false then
+                label.AnchorPoint = Vector2.new(0, 0)
+                label.Position = UDim2.new(0, 7, 0, 0)
+                label.Size = UDim2.new(1, -14, 0, 25)
+                label.TextXAlignment = Enum.TextXAlignment.Left
+            else
+                centerWindowTitle(self, label)
+            end
+            return self
+        end)
+    end
+
     if type(window.ShowTabInfo) ~= "function" then
         install(window, "ShowTabInfo", function(self, name, description)
             self.__AspectSysTabInfo = tostring(name or "") .. (description and (" • " .. tostring(description)) or "")
@@ -2055,17 +2146,25 @@ local function augmentWindow(window)
 
             local tab = baseAddTab(self, name, icon, description)
             if type(tab) == "table" then
-                tab.Icon = icon or tab.Icon
-                tab.Description = description or tab.Description
-                augmentTab(tab)
+                pcall(function()
+                    tab.Icon = icon or tab.Icon
+                    tab.Description = description or tab.Description
+                    tab.__AspectSysWindow = self
+                    augmentTab(tab)
+                    hookTabFrameSizing(window)
+                    fitNativeTabScrollers(window)
+                end)
             end
             return tab
         end
     end
 
     for _, tab in pairs(window.Tabs or {}) do
+        tab.__AspectSysWindow = window
         augmentTab(tab)
     end
+    hookTabFrameSizing(window)
+    fitNativeTabScrollers(window)
 
     return window
 end
@@ -2076,9 +2175,18 @@ if type(originalCreateWindow) == "function" and not Library.__AspectSysCreateWin
 
     Library.CreateWindow = function(self, info)
         local config = type(info) == "table" and info or {}
-        local window = originalCreateWindow(self, info)
+        if type(info) == "table" and typeof(info.Size) ~= "UDim2" then
+            config.Size = UDim2.fromOffset(760, 500)
+        end
+        local window = originalCreateWindow(self, config)
         window = augmentWindow(window)
         self.Window = window
+
+        
+        pcall(function()
+            centerWindowTitle(window, findWindowTitleLabel(window))
+            hookTabFrameSizing(window)
+        end)
 
         if config.Footer then
             window:SetFooter(config.Footer)
@@ -2094,34 +2202,13 @@ if type(originalCreateWindow) == "function" and not Library.__AspectSysCreateWin
             self.NotifySide = config.NotifySide
         end
 
-        -- Upstream Linoria remains authoritative for rendering and tab state.
-        -- We only normalize newly-created groupbox visibility and then refresh
-        -- the first tab on the next scheduler turn, after the initial UI tree exists.
-        task.defer(function()
-            if window and window.Holder and window.Holder.Parent then
-                for _, tab in pairs(window.Tabs or {}) do
-                    for _, groupbox in pairs(tab.Groupboxes or {}) do
-                        normalizeGroupboxVisualState(groupbox)
-                    end
-                end
-                local firstTab
-                for _, tab in pairs(window.Tabs or {}) do
-                    firstTab = tab
-                    break
-                end
-                if firstTab and type(firstTab.ShowTab) == "function" then
-                    pcall(function() firstTab:ShowTab() end)
-                end
-            end
-        end)
-
         return window
     end
 end
 
----------------------------------------------------------------------
--- Library utility compatibility.
----------------------------------------------------------------------
+
+
+
 
 if type(Library.SetDPI) ~= "function" and type(Library.SetDPIScale) == "function" then
     Library.SetDPI = function(self, percent)
@@ -2176,7 +2263,6 @@ if type(Library.SetNotifySide) ~= "function" then
         return self
     end
 end
-
 
 if type(Library.AddDraggableLabel) ~= "function" then
     local floats = Library.__AspectSysFloats
@@ -2246,7 +2332,38 @@ if type(Library.AddDraggableLabel) ~= "function" then
     end
 
     local function drag(ui)
-        return Library:MakeDraggable(ui, math.huge)
+        ui.Active = true
+        local dragging = false
+        local start = nil
+        local startPos = nil
+        giveSignal(ui.InputBegan:Connect(function(input)
+            if input.UserInputType ~= Enum.UserInputType.MouseButton1 then
+                return
+            end
+            dragging = true
+            start = input.Position
+            startPos = ui.Position
+            giveSignal(input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end))
+        end))
+        giveSignal(InputService.InputChanged:Connect(function(input)
+            if not dragging or input.UserInputType ~= Enum.UserInputType.MouseMovement then
+                return
+            end
+            if not start or not startPos or not ui.Parent then
+                return
+            end
+            local delta = input.Position - start
+            ui.Position = UDim2.new(
+                startPos.X.Scale,
+                startPos.X.Offset + delta.X,
+                startPos.Y.Scale,
+                startPos.Y.Offset + delta.Y
+            )
+        end))
     end
 
     Library.AddDraggableLabel = function(self, text, icon, iconPosition)
@@ -2541,69 +2658,49 @@ if type(Library.AddDraggableMenu) ~= "function" then
     end
 end
 
----------------------------------------------------------------------
--- Watermark.
----------------------------------------------------------------------
 
-if type(Library.SetWatermark) ~= "function" or type(Library.AddWatermark) ~= "function" then
-    Library.__AspectSysWatermark = Library.__AspectSysWatermark or nil
 
-    Library.AddWatermark = function(self, config)
-        config = type(config) == "table" and config or {}
-        if self.__AspectSysWatermark then
-            self.__AspectSysWatermark:Destroy()
-        end
 
-        local label = self:AddDraggableLabel("")
-        label.Holder.Position = config.Position or UDim2.fromOffset(10, 10)
-        label.SetSegments = function(item, segments)
-            item.Segments = segments
-            return item:Refresh()
-        end
-        label.SetText = function(item, text)
-            item.Label.Text = tostring(text or "")
-            return item
-        end
-        label.Refresh = function(item)
-            local segments = item.Segments or config.Segments or {}
+
+
+
+
+
+do
+    if type(Library.SetWatermark) == "function" and Library.Watermark then
+        Library.__AspectSysNativeWatermark = true
+    end
+
+    if type(Library.SetWatermark) == "function" then
+        Library.SetWatermarkSegments = Library.SetWatermarkSegments or function(self, segments)
+            if type(segments) ~= "table" then
+                return self
+            end
+
             local parts = {}
             for _, segment in ipairs(segments) do
-                local value = segment.Text
-                if type(value) == "function" then
-                    value = value()
+                local value = segment
+                if type(segment) == "table" then
+                    value = segment.Text
                 end
-                table.insert(parts, tostring(value or ""))
+                if type(value) == "function" then
+                    local ok, result = pcall(value)
+                    value = ok and result or ""
+                end
+                if value ~= nil then
+                    table.insert(parts, tostring(value))
+                end
             end
-            item.Label.Text = table.concat(parts, "  |  ")
-            return item
-        end
-        label:Refresh()
-        label:SetVisible(config.Visible ~= false)
-        self.__AspectSysWatermark = label
-        return label
-    end
 
-    Library.SetWatermark = function(self, text)
-        if not self.__AspectSysWatermark then
-            self:AddWatermark({ Visible = false })
+            return self:SetWatermark(table.concat(parts, " | "))
         end
-        self.__AspectSysWatermark:SetText(text)
-        return self
-    end
-
-    Library.SetWatermarkVisibility = function(self, visible)
-        if not self.__AspectSysWatermark then
-            self:AddWatermark({ Visible = false })
-        end
-        self.__AspectSysWatermark:SetVisible(visible == true)
-        return self
     end
 end
 
----------------------------------------------------------------------
--- Optional loading + context menu helpers. These stay separate from the
--- Linoria controls and are not used to replace the renderer.
----------------------------------------------------------------------
+
+
+
+
 
 if type(Library.CreateLoading) ~= "function" then
     Library.CreateLoading = function(self, info)
@@ -2795,12 +2892,12 @@ if type(Library.AddContextMenu) ~= "function" then
     end
 end
 
----------------------------------------------------------------------
--- Non-invasive runtime normalization.
---
--- The upstream Linoria renderer owns tab/groupbox state. LinoriaPlus only
--- provides a safe visual refresh helper rather than wrapping ShowTab/Resize.
----------------------------------------------------------------------
+
+
+
+
+
+
 
 Library.RefreshUI = function(self, window)
     window = window or self.Window
@@ -2826,8 +2923,8 @@ Library.RefreshUI = function(self, window)
     return self
 end
 
--- Normalize notification input so both Linoria's string API and Obsidian-style
--- {Title, Description, Time} notifications are accepted.
+
+
 do
     local originalNotify = Library.Notify
     if type(originalNotify) == "function" and not Library.__AspectSysNotifyHardened then
@@ -2859,7 +2956,7 @@ do
     end
 end
 
--- Ensure AttemptSave exists even when a different Linoria fork is supplied.
+
 if type(Library.AttemptSave) ~= "function" then
     Library.AttemptSave = function(self)
         local manager = self.SaveManager
@@ -2869,226 +2966,18 @@ if type(Library.AttemptSave) ~= "function" then
     end
 end
 
--- Watermark: disabled by default, single-instance, and automatically refreshed.
+
+
+
 do
-    if Library.__AspectSysWatermarkRefreshSignal then
-        disconnect(Library.__AspectSysWatermarkRefreshSignal)
-        Library.__AspectSysWatermarkRefreshSignal = nil
-    end
-
-    Library.AddWatermark = function(self, config)
-        config = type(config) == "table" and config or {}
-
-        if self.__AspectSysWatermark then
-            safeDestroy(self.__AspectSysWatermark.Holder)
-            self.__AspectSysWatermark = nil
-        end
-
-        local label = self:AddDraggableLabel({
-            Text = "",
-            Icon = config.Icon,
-            IconPosition = config.IconPosition,
-        })
-        label.Holder.Position = config.Position or UDim2.fromOffset(10, 10)
-        label.Segments = type(config.Segments) == "table" and config.Segments or {}
-        label.Visible = config.Visible == true
-
-        function label:SetSegments(segments)
-            self.Segments = type(segments) == "table" and segments or {}
-            return self:Refresh()
-        end
-
-        function label:SetText(value)
-            self.Segments = nil
-            self.Label.Text = tostring(value or "")
-            return self
-        end
-
-        function label:Refresh()
-            if type(self.Segments) == "table" then
-                local parts = {}
-                for _, segment in ipairs(self.Segments) do
-                    if type(segment) == "table" then
-                        local value = segment.Text
-                        if type(value) == "function" then
-                            local ok, result = pcall(value)
-                            value = ok and result or ""
-                        end
-                        table.insert(parts, tostring(value or ""))
-                    elseif segment ~= nil then
-                        table.insert(parts, tostring(segment))
-                    end
-                end
-                self.Label.Text = table.concat(parts, "  |  ")
-            end
-            return self
-        end
-
-        function label:SetVisible(value)
-            self.Visible = value == true
-            self.Holder.Visible = self.Visible
-            return self
-        end
-
-        label:Refresh()
-        label:SetVisible(config.Visible == true)
-        self.__AspectSysWatermark = label
-
-        local accumulator = 0
-        self.__AspectSysWatermarkRefreshSignal = RunService.Heartbeat:Connect(function(dt)
-            accumulator = accumulator + dt
-            if accumulator < 0.25 then
-                return
-            end
-            accumulator = 0
-
-            if label.Holder and label.Holder.Parent and label.Visible and type(label.Refresh) == "function" then
-                label:Refresh()
-            end
-        end)
-        giveSignal(self.__AspectSysWatermarkRefreshSignal)
-
-        return label
-    end
-
-    Library.SetWatermark = function(self, value)
-        if not self.__AspectSysWatermark then
-            self:AddWatermark({ Visible = false })
-        end
-        return self.__AspectSysWatermark:SetText(value)
-    end
-
-    Library.SetWatermarkSegments = function(self, segments)
-        if not self.__AspectSysWatermark then
-            self:AddWatermark({ Visible = false })
-        end
-        return self.__AspectSysWatermark:SetSegments(segments)
-    end
-
-    Library.SetWatermarkVisibility = function(self, visible)
-        if not self.__AspectSysWatermark then
-            self:AddWatermark({ Visible = false })
-        end
-        return self.__AspectSysWatermark:SetVisible(visible == true)
-    end
-end
-
--- Keybind list: disabled by default, rebuilt from Library.Options, and kept in sync.
-do
-    Library.KeybindListVisible = false
-    Library.KeybindFrame = Library.KeybindFrame or nil
-
-    local function getKeybinds()
-        local result = {}
-        for index, option in pairs(Library.Options or {}) do
-            if type(option) == "table" and option.Type == "KeyPicker" then
-                local key = option.Value
-                if key ~= nil and tostring(key) ~= "" and tostring(key) ~= "Unknown" then
-                    local mode = tostring(option.Mode or "Toggle")
-                    local state = option.Toggled == true
-                    table.insert(result, {
-                        Index = tostring(index),
-                        Name = tostring(option.__AspectSysDisplayName or option.Text or index),
-                        Key = tostring(key),
-                        Mode = mode,
-                        State = state,
-                    })
-                end
-            end
-        end
-        table.sort(result, function(a, b)
-            return a.Name:lower() < b.Name:lower()
-        end)
-        return result
-    end
-
-    function Library:RefreshKeybinds()
-        local frame = self.KeybindFrame
-        if not frame or not frame.Parent then
-            return self
-        end
-
-        for _, child in ipairs(frame:GetChildren()) do
-            if child:IsA("TextLabel") and child.Name ~= "Title" then
-                child:Destroy()
-            end
-        end
-
-        local keybinds = getKeybinds()
-        frame.Size = UDim2.fromOffset(230, 28 + (#keybinds * 20))
-
-        for rowIndex, bind in ipairs(keybinds) do
-            local stateText = bind.Mode == "Toggle" and (bind.State and "ON" or "OFF") or bind.Mode:upper()
-            local row = make("TextLabel", {
-                Name = "Keybind_" .. tostring(rowIndex),
-                BackgroundTransparency = 1,
-                Position = UDim2.fromOffset(8, 22 + ((rowIndex - 1) * 20)),
-                Size = UDim2.new(1, -16, 0, 18),
-                Font = Library.Font,
-                TextColor3 = Library.FontColor,
-                TextSize = 12,
-                TextXAlignment = Enum.TextXAlignment.Left,
-                Text = string.format("%s  [%s]  %s", bind.Name, bind.Key, stateText),
-                ZIndex = 2002,
-                Parent = frame,
-            })
-            pcall(function()
-                Library:AddToRegistry(row, { TextColor3 = "FontColor" }, true)
-            end)
-        end
-
-        return self
-    end
+    Library.KeybindListVisible = true
 
     function Library:SetKeybindListVisibility(visible)
-        self.KeybindListVisible = visible == true
-        if self.__AspectSysNativeKeybindFrame == nil then
-            self.__AspectSysNativeKeybindFrame = rawget(self, "KeybindFrame")
-        end
-        if self.__AspectSysNativeKeybindFrame then
-            self.__AspectSysNativeKeybindFrame.Visible = false
-        end
-        if self.KeybindListVisible and not self.KeybindFrame then
-            self.KeybindFrame = make("Frame", {
-                Name = "LinoriaPlusKeybinds",
-                BackgroundColor3 = Library.MainColor,
-                BorderColor3 = Library.OutlineColor,
-                Size = UDim2.fromOffset(230, 28),
-                Position = UDim2.fromOffset(10, 60),
-                ZIndex = 2000,
-                Parent = Library.ScreenGui,
-            })
-            self.KeybindFrame.Title = make("TextLabel", {
-                Name = "Title",
-                BackgroundTransparency = 1,
-                Position = UDim2.fromOffset(8, 4),
-                Size = UDim2.new(1, -16, 0, 18),
-                Font = Library.Font,
-                TextColor3 = Library.FontColor,
-                TextSize = 13,
-                TextXAlignment = Enum.TextXAlignment.Left,
-                Text = "Keybinds",
-                ZIndex = 2001,
-                Parent = self.KeybindFrame,
-            })
-            pcall(function()
-                Library:AddToRegistry(self.KeybindFrame, {
-                    BackgroundColor3 = "MainColor",
-                    BorderColor3 = "OutlineColor",
-                }, true)
-                Library:AddToRegistry(self.KeybindFrame.Title, {
-                    TextColor3 = "FontColor",
-                }, true)
-            end)
-            if type(self.__AspectSysDrag) == "function" then
-                self.__AspectSysDrag(self.KeybindFrame)
-            end
-        end
-
+        local value = visible == true
+        self.KeybindListVisible = value
         if self.KeybindFrame then
-            self.KeybindFrame.Visible = self.KeybindListVisible
+            self.KeybindFrame.Visible = value
         end
-        self:RefreshKeybinds()
         return self
     end
 
@@ -3096,27 +2985,43 @@ do
         return self:SetKeybindListVisibility(not self.KeybindListVisible)
     end
 
-    Library:SetKeybindListVisibility(false)
-
-    if not Library.__AspectSysKeybindRefreshSignal then
-        local timer = 0
-        Library.__AspectSysKeybindRefreshSignal = RunService.Heartbeat:Connect(function(dt)
-            timer = timer + dt
-            if timer < 0.15 then
-                return
-            end
-            timer = 0
-            if Library.KeybindListVisible then
+    function Library:RefreshKeybinds()
+        
+        
+        for _, option in pairs(self.Options or {}) do
+            if type(option) == "table" and option.Type == "KeyPicker" and type(option.Update) == "function" then
                 pcall(function()
-                    Library:RefreshKeybinds()
+                    option:Update()
                 end)
             end
+        end
+        return self
+    end
+
+    
+    if Library.Watermark and type(Library.SetWatermark) == "function" then
+        pcall(function()
+            Library:SetWatermark("aspect.sys")
+            if type(Library.SetWatermarkVisibility) == "function" then
+                Library:SetWatermarkVisibility(true)
+            end
         end)
-        giveSignal(Library.__AspectSysKeybindRefreshSignal)
+    elseif type(Library.SetWatermarkVisibility) == "function" then
+        pcall(function()
+            Library:SetWatermarkVisibility(true)
+        end)
+    end
+
+    if Library.KeybindFrame then
+        Library.KeybindFrame.Visible = true
+        Library.KeybindListVisible = true
+        pcall(function()
+            Library:RefreshKeybinds()
+        end)
     end
 end
 
--- Keep every registered dependency box synchronized with the controls it watches.
+
 do
     local originalUpdateDependencies = Library.UpdateDependencyBoxes
     if not Library.__AspectSysDependencyUpdateHardened then
@@ -3147,7 +3052,7 @@ do
     end
 end
 
--- DPI is applied to every top-level GUI root and to roots created after SetDPI.
+
 do
     local function applyDPIToRoot(root, scale)
         if not root or not root:IsA("GuiObject") then
@@ -3200,7 +3105,7 @@ do
     end
 end
 
--- Unload is idempotent and clears the executor cache so the next load gets a fresh GUI.
+
 do
     local originalUnloadFinal = Library.Unload
     if type(originalUnloadFinal) == "function" and not Library.__AspectSysUnloadHardened then
@@ -3259,7 +3164,7 @@ for _, windowTab in pairs((Library.Window and Library.Window.Tabs) or {}) do
     end
 end
 
--- Convenience aliases used by older aspect.sys code.
+
 Library.AddTooltip = Library.AddTooltip or Library.AddToolTip
 Library.CreateLoadingWindow = Library.CreateLoadingWindow or Library.CreateLoading
 Library.ShowLoading = Library.ShowLoading or Library.CreateLoading
@@ -3269,6 +3174,6 @@ Library.ShowDialog = Library.ShowDialog or function(self, info)
     end
 end
 
--- Create a tiny, predictable marker for local addons/scripts.
+
 env.LinoriaPlus = Library
 return Library
