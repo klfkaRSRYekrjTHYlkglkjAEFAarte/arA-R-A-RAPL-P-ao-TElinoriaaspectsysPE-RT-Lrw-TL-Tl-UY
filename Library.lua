@@ -7,10 +7,9 @@
 
 
 
-
-print("v5.1.10")
+print("v5.1.11b")
 local BASE_URL = "https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/Library.lua"
-local VERSION = "5.1.10"
+local VERSION = "5.1.11"
 
 local env = (type(getgenv) == "function" and getgenv()) or (type(shared) == "table" and shared) or {}
 local Previous = rawget(env, "LinoriaPlus")
@@ -47,115 +46,63 @@ local function patchLinoriaDrag(source)
 
     target.Active = true
 
-    if not Library.__AspectSysDragState then
-        local state = {
-            Instance = nil,
-            StartInput = nil,
-            StartPosition = nil,
-            Cutoff = 40,
-            Dragging = false,
-        }
+    local dragging = false
+    local dragInput = nil
+    local dragStart = nil
+    local startPos = nil
 
-        Library.__AspectSysDragState = state
-
-        local changed = InputService.InputChanged:Connect(function(Input)
-            local current = Library.__AspectSysDragState
-            if not current or not current.Dragging then
-                return
-            end
-
-            local instance = current.Instance
-            if typeof(instance) ~= "Instance" or not instance.Parent then
-                current.Instance = nil
-                current.StartInput = nil
-                current.StartPosition = nil
-                current.Dragging = false
-                return
-            end
-
-            if Input.UserInputType ~= Enum.UserInputType.MouseMovement
-                and Input.UserInputType ~= Enum.UserInputType.Touch then
-                return
-            end
-
-            local startInput = current.StartInput
-            local startPosition = current.StartPosition
-            if not startInput or not startPosition then
-                return
-            end
-
-            local delta = Input.Position - startInput
-            instance.Position = UDim2.new(
-                startPosition.X.Scale,
-                startPosition.X.Offset + delta.X,
-                startPosition.Y.Scale,
-                startPosition.Y.Offset + delta.Y
-            )
-        end)
-
-        local ended = InputService.InputEnded:Connect(function(Input)
-            if Input.UserInputType ~= Enum.UserInputType.MouseButton1
-                and Input.UserInputType ~= Enum.UserInputType.Touch then
-                return
-            end
-
-            local current = Library.__AspectSysDragState
-            if current then
-                current.Instance = nil
-                current.StartInput = nil
-                current.StartPosition = nil
-                current.Dragging = false
-            end
-        end)
-
-        if type(Library.GiveSignal) == "function" then
-            Library:GiveSignal(changed)
-            Library:GiveSignal(ended)
+    target.InputBegan:Connect(function(input)
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1
+            and input.UserInputType ~= Enum.UserInputType.Touch then
+            return
         end
-    end
 
-    local cutoff = tonumber(Cutoff) or 40
-    local dragConnections = Library.__AspectSysDragConnections
-    if not dragConnections then
-        dragConnections = setmetatable({}, { __mode = "k" })
-        Library.__AspectSysDragConnections = dragConnections
-    end
+        dragging = true
+        dragStart = input.Position
+        startPos = target.Position
 
-    local oldConnection = dragConnections[target]
-    if oldConnection and type(oldConnection.Disconnect) == "function" then
-        pcall(function() oldConnection:Disconnect() end)
-    end
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+                dragInput = nil
+                dragStart = nil
+                startPos = nil
+            end
+        end)
+    end)
 
-    local beginConnection = target.InputBegan:Connect(function(Input)
-        if Input.UserInputType ~= Enum.UserInputType.MouseButton1
-            and Input.UserInputType ~= Enum.UserInputType.Touch then
+    target.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+
+    InputService.InputChanged:Connect(function(input)
+        if input ~= dragInput or not dragging then
             return
         end
 
         if not target.Parent then
+            dragging = false
+            dragInput = nil
+            dragStart = nil
+            startPos = nil
             return
         end
 
-        local localY = Input.Position.Y - target.AbsolutePosition.Y
-        if localY > cutoff then
+        if not dragStart or not startPos then
             return
         end
 
-        local current = Library.__AspectSysDragState
-        current.Instance = target
-        current.StartInput = Input.Position
-        current.StartPosition = target.Position
-        current.Cutoff = cutoff
-        current.Dragging = true
+        local delta = input.Position - dragStart
+        target.Position = UDim2.new(
+            startPos.X.Scale,
+            startPos.X.Offset + delta.X,
+            startPos.Y.Scale,
+            startPos.Y.Offset + delta.Y
+        )
     end)
-
-    dragConnections[target] = beginConnection
-
-    if type(Library.GiveSignal) == "function" then
-        Library:GiveSignal(beginConnection)
-    end
-
-    return target
 end]]
 
     local pattern = "function Library:MakeDraggable%([^\n]*%)\n.-\nend\n\nfunction Library:AddToolTip"
