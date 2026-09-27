@@ -8,9 +8,9 @@
 
 
 
-print("v5.1.9")
+print("v5.1.10")
 local BASE_URL = "https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/Library.lua"
-local VERSION = "5.1.9"
+local VERSION = "5.1.10"
 
 local env = (type(getgenv) == "function" and getgenv()) or (type(shared) == "table" and shared) or {}
 local Previous = rawget(env, "LinoriaPlus")
@@ -23,6 +23,148 @@ if Previous and type(Previous.Unload) == "function" then
     pcall(function()
         Previous:Unload()
     end)
+end
+
+local function patchLinoriaDrag(source)
+    if type(source) ~= "string" or source == "" then
+        return source
+    end
+
+    local replacement = [[function Library:MakeDraggable(Instance, Cutoff)
+    local target = Instance
+
+    if typeof(target) ~= "Instance" then
+        if type(target) == "table" then
+            target = rawget(target, "Holder") or rawget(target, "Instance") or rawget(target, "Frame") or rawget(target, "Container")
+        else
+            target = nil
+        end
+    end
+
+    if typeof(target) ~= "Instance" or not target:IsA("GuiObject") then
+        return target
+    end
+
+    target.Active = true
+
+    if not Library.__AspectSysDragState then
+        local state = {
+            Instance = nil,
+            StartInput = nil,
+            StartPosition = nil,
+            Cutoff = 40,
+            Dragging = false,
+        }
+
+        Library.__AspectSysDragState = state
+
+        local changed = InputService.InputChanged:Connect(function(Input)
+            local current = Library.__AspectSysDragState
+            if not current or not current.Dragging then
+                return
+            end
+
+            local instance = current.Instance
+            if typeof(instance) ~= "Instance" or not instance.Parent then
+                current.Instance = nil
+                current.StartInput = nil
+                current.StartPosition = nil
+                current.Dragging = false
+                return
+            end
+
+            if Input.UserInputType ~= Enum.UserInputType.MouseMovement
+                and Input.UserInputType ~= Enum.UserInputType.Touch then
+                return
+            end
+
+            local startInput = current.StartInput
+            local startPosition = current.StartPosition
+            if not startInput or not startPosition then
+                return
+            end
+
+            local delta = Input.Position - startInput
+            instance.Position = UDim2.new(
+                startPosition.X.Scale,
+                startPosition.X.Offset + delta.X,
+                startPosition.Y.Scale,
+                startPosition.Y.Offset + delta.Y
+            )
+        end)
+
+        local ended = InputService.InputEnded:Connect(function(Input)
+            if Input.UserInputType ~= Enum.UserInputType.MouseButton1
+                and Input.UserInputType ~= Enum.UserInputType.Touch then
+                return
+            end
+
+            local current = Library.__AspectSysDragState
+            if current then
+                current.Instance = nil
+                current.StartInput = nil
+                current.StartPosition = nil
+                current.Dragging = false
+            end
+        end)
+
+        if type(Library.GiveSignal) == "function" then
+            Library:GiveSignal(changed)
+            Library:GiveSignal(ended)
+        end
+    end
+
+    local cutoff = tonumber(Cutoff) or 40
+    local dragConnections = Library.__AspectSysDragConnections
+    if not dragConnections then
+        dragConnections = setmetatable({}, { __mode = "k" })
+        Library.__AspectSysDragConnections = dragConnections
+    end
+
+    local oldConnection = dragConnections[target]
+    if oldConnection and type(oldConnection.Disconnect) == "function" then
+        pcall(function() oldConnection:Disconnect() end)
+    end
+
+    local beginConnection = target.InputBegan:Connect(function(Input)
+        if Input.UserInputType ~= Enum.UserInputType.MouseButton1
+            and Input.UserInputType ~= Enum.UserInputType.Touch then
+            return
+        end
+
+        if not target.Parent then
+            return
+        end
+
+        local localY = Input.Position.Y - target.AbsolutePosition.Y
+        if localY > cutoff then
+            return
+        end
+
+        local current = Library.__AspectSysDragState
+        current.Instance = target
+        current.StartInput = Input.Position
+        current.StartPosition = target.Position
+        current.Cutoff = cutoff
+        current.Dragging = true
+    end)
+
+    dragConnections[target] = beginConnection
+
+    if type(Library.GiveSignal) == "function" then
+        Library:GiveSignal(beginConnection)
+    end
+
+    return target
+end]]
+
+    local pattern = "function Library:MakeDraggable%([^\n]*%)\n.-\nend\n\nfunction Library:AddToolTip"
+    local patched, count = string.gsub(source, pattern, replacement .. "\n\nfunction Library:AddToolTip", 1)
+    if count == 1 then
+        return patched
+    end
+
+    return source
 end
 
 local function loadSource(url, name)
@@ -55,110 +197,6 @@ local InputService = game:GetService("UserInputService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
-
-do
-    Library.Signals = type(Library.Signals) == "table" and Library.Signals or {}
-    if type(Library.GiveSignal) ~= "function" then
-        function Library:GiveSignal(signal)
-            if signal and type(signal.Disconnect) == "function" then
-                table.insert(self.Signals, signal)
-            end
-            return signal
-        end
-    end
-
-    local activeDrag = nil
-    local dragStates = setmetatable({}, { __mode = "k" })
-
-    local function stopDrag(state)
-        if not state then
-            return
-        end
-        state.dragging = false
-        if activeDrag == state then
-            activeDrag = nil
-        end
-    end
-
-    Library.MakeDraggable = function(instance, cutoff)
-        if not instance or not instance:IsA("GuiObject") then
-            return
-        end
-
-        local previous = dragStates[instance]
-        if previous and previous.began then
-            previous.began:Disconnect()
-            previous.began = nil
-        end
-
-        instance.Active = true
-
-        local state = {
-            instance = instance,
-            dragging = false,
-            startInput = nil,
-            startPosition = nil,
-            cutoff = tonumber(cutoff) or 40,
-            began = nil,
-        }
-
-        dragStates[instance] = state
-
-        state.began = instance.InputBegan:Connect(function(input)
-            if input.UserInputType ~= Enum.UserInputType.MouseButton1 then
-                return
-            end
-
-            local localY = input.Position.Y - instance.AbsolutePosition.Y
-            if localY > state.cutoff then
-                return
-            end
-
-            if activeDrag and activeDrag ~= state then
-                stopDrag(activeDrag)
-            end
-
-            state.dragging = true
-            state.startInput = input.Position
-            state.startPosition = instance.Position
-            activeDrag = state
-        end)
-    end
-
-    local dragChanged = InputService.InputChanged:Connect(function(input)
-        local state = activeDrag
-        if not state or not state.dragging then
-            return
-        end
-        if input.UserInputType ~= Enum.UserInputType.MouseMovement then
-            return
-        end
-
-        local instance = state.instance
-        if not instance or not instance.Parent then
-            stopDrag(state)
-            return
-        end
-
-        local delta = input.Position - state.startInput
-        local start = state.startPosition
-        instance.Position = UDim2.new(
-            start.X.Scale,
-            start.X.Offset + delta.X,
-            start.Y.Scale,
-            start.Y.Offset + delta.Y
-        )
-    end)
-
-    local dragEnded = InputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            stopDrag(activeDrag)
-        end
-    end)
-
-    Library:GiveSignal(dragChanged)
-    Library:GiveSignal(dragEnded)
-end
 
 Library.__AspectSysLinoriaPlusVersion = VERSION
 Library.__AspectSysLinoriaPlusBase = "LinoriaLib"
@@ -251,7 +289,7 @@ local function make(className, properties)
     properties = properties or {}
     local instance = Library:Create(className, properties)
     local parent = properties.Parent
-    if Library.ScreenGui and parent == Library.ScreenGui and instance and instance.IsA and instance:IsA("GuiObject") then
+    if typeof(Library.ScreenGui) == "Instance" and parent == Library.ScreenGui and typeof(instance) == "Instance" and instance:IsA("GuiObject") then
         local scale = Library.DPIScale or 1
         local uiScale = instance:FindFirstChild("LinoriaPlusUIScale")
         if not uiScale then
@@ -336,7 +374,7 @@ local function normalizeGroupboxVisualState(groupbox)
     local container = groupbox.Container
     local outer = container and container.Parent and container.Parent.Parent
 
-    if outer and outer:IsA("GuiObject") then
+    if typeof(outer) == "Instance" and outer:IsA("GuiObject") then
         local visible = groupbox.__AspectSysVisible
         if visible == nil then
             visible = groupbox.Visible ~= false
@@ -344,11 +382,11 @@ local function normalizeGroupboxVisualState(groupbox)
         outer.Visible = visible == true
 
         if groupbox.__AspectSysCollapsed == true then
-            if container:IsA("GuiObject") then
+            if typeof(container) == "Instance" and container:IsA("GuiObject") then
                 container.Visible = false
             end
         elseif groupbox.__AspectSysCollapsed == false then
-            if container:IsA("GuiObject") then
+            if typeof(container) == "Instance" and container:IsA("GuiObject") then
                 container.Visible = true
             end
         end
@@ -472,7 +510,7 @@ local function dependencyMatches(control, expected)
 end
 
 local function installDependencyBox(groupbox)
-    if type(groupbox) ~= "table" or type(groupbox.Container) ~= "userdata" then
+    if type(groupbox) ~= "table" or typeof(groupbox.Container) ~= "Instance" then
         return groupbox
     end
 
@@ -1588,7 +1626,7 @@ augmentTab = function(tab)
     if type(tab.Hover) ~= "function" then
         install(tab, "Hover", function(self, hovering)
             self.__AspectSysHovering = hovering == true
-            if self.Button and self.Button:IsA("GuiButton") then
+            if typeof(self.Button) == "Instance" and self.Button:IsA("GuiButton") then
                 self.Button.BackgroundTransparency = self.__AspectSysHovering and 0.82 or 1
             end
             return self
@@ -2198,6 +2236,9 @@ if type(originalCreateWindow) == "function" and not Library.__AspectSysCreateWin
             config.Size = UDim2.fromOffset(760, 500)
         end
         local window = originalCreateWindow(self, config)
+        if type(window) ~= "table" then
+            return window
+        end
         window = augmentWindow(window)
         self.Window = window
 
