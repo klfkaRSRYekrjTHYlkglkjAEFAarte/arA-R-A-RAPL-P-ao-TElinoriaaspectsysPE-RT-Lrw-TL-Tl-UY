@@ -10,7 +10,7 @@
 ]]
 
 local BASE_URL = "https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/Library.lua"
-local VERSION = "5.1.4"
+local VERSION = "5.1.8"
 
 local env = (type(getgenv) == "function" and getgenv()) or (type(shared) == "table" and shared) or {}
 local Previous = rawget(env, "LinoriaPlus")
@@ -2041,6 +2041,91 @@ if type(Library.SetNotifySide) ~= "function" then
     end
 end
 
+do
+    local dragStates = setmetatable({}, { __mode = "k" })
+
+    function Library:MakeDraggable(instance, cutoff)
+        if not instance or not instance:IsA("GuiObject") then
+            return
+        end
+
+        local previous = dragStates[instance]
+        if previous then
+            if previous.began then previous.began:Disconnect() end
+            if previous.changed then previous.changed:Disconnect() end
+            if previous.ended then previous.ended:Disconnect() end
+            dragStates[instance] = nil
+        end
+
+        instance.Active = true
+
+        local state = {
+            dragging = false,
+            startInput = nil,
+            startPosition = nil,
+            began = nil,
+            changed = nil,
+            ended = nil,
+        }
+        dragStates[instance] = state
+
+        state.began = instance.InputBegan:Connect(function(input)
+            if input.UserInputType ~= Enum.UserInputType.MouseButton1
+                and input.UserInputType ~= Enum.UserInputType.Touch then
+                return
+            end
+
+            local pointer = input.Position
+            local absolutePosition = instance.AbsolutePosition
+            local localY = pointer.Y - absolutePosition.Y
+            local limit = tonumber(cutoff) or 40
+            if localY > limit then
+                return
+            end
+
+            state.dragging = true
+            state.startInput = pointer
+            state.startPosition = instance.Position
+        end)
+
+        state.changed = InputService.InputChanged:Connect(function(input)
+            if not state.dragging or not state.startInput or not state.startPosition then
+                return
+            end
+
+            if input.UserInputType ~= Enum.UserInputType.MouseMovement
+                and input.UserInputType ~= Enum.UserInputType.Touch then
+                return
+            end
+
+            if not instance.Parent then
+                state.dragging = false
+                return
+            end
+
+            local delta = input.Position - state.startInput
+            local startPosition = state.startPosition
+            instance.Position = UDim2.new(
+                startPosition.X.Scale,
+                startPosition.X.Offset + delta.X,
+                startPosition.Y.Scale,
+                startPosition.Y.Offset + delta.Y
+            )
+        end)
+
+        state.ended = InputService.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1
+                or input.UserInputType == Enum.UserInputType.Touch then
+                state.dragging = false
+                state.startInput = nil
+                state.startPosition = nil
+            end
+        end)
+
+        return instance
+    end
+end
+
 if type(Library.AddDraggableLabel) ~= "function" then
     local floats = Library.__AspectSysFloats
     if not (floats and floats.Parent) then
@@ -2109,38 +2194,7 @@ if type(Library.AddDraggableLabel) ~= "function" then
     end
 
     local function drag(ui)
-        ui.Active = true
-        local dragging = false
-        local start = nil
-        local startPos = nil
-        giveSignal(ui.InputBegan:Connect(function(input)
-            if input.UserInputType ~= Enum.UserInputType.MouseButton1 then
-                return
-            end
-            dragging = true
-            start = input.Position
-            startPos = ui.Position
-            giveSignal(input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
-                    dragging = false
-                end
-            end))
-        end))
-        giveSignal(InputService.InputChanged:Connect(function(input)
-            if not dragging or input.UserInputType ~= Enum.UserInputType.MouseMovement then
-                return
-            end
-            if not start or not startPos or not ui.Parent then
-                return
-            end
-            local delta = input.Position - start
-            ui.Position = UDim2.new(
-                startPos.X.Scale,
-                startPos.X.Offset + delta.X,
-                startPos.Y.Scale,
-                startPos.Y.Offset + delta.Y
-            )
-        end))
+        return Library:MakeDraggable(ui, math.huge)
     end
 
     Library.AddDraggableLabel = function(self, text, icon, iconPosition)
