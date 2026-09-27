@@ -61,62 +61,6 @@ Library.__AspectSysLinoriaPlusBase = "LinoriaLib"
 Library.__AspectSysLinoriaBase = "LinoriaLib"
 Library.LocalPlayer = Library.LocalPlayer or LocalPlayer
 
-if type(Library.MakeDraggable) == "function" and not Library.__AspectSysEventDrivenDrag then
-    Library.__AspectSysEventDrivenDrag = true
-    Library.MakeDraggable = function(self, Instance, Cutoff)
-        if not Instance then
-            return
-        end
-
-        Instance.Active = true
-
-        local dragging = false
-        local dragStart
-        local startPosition
-        local cutoff = tonumber(Cutoff) or 40
-
-        self:GiveSignal(Instance.InputBegan:Connect(function(input)
-            if input.UserInputType ~= Enum.UserInputType.MouseButton1 then
-                return
-            end
-
-            local localPosition = input.Position - Instance.AbsolutePosition
-            if localPosition.Y > cutoff then
-                return
-            end
-
-            dragging = true
-            dragStart = input.Position
-            startPosition = Instance.Position
-        end))
-
-        self:GiveSignal(InputService.InputChanged:Connect(function(input)
-            if not dragging or input.UserInputType ~= Enum.UserInputType.MouseMovement then
-                return
-            end
-            if not dragStart or not startPosition or not Instance.Parent then
-                return
-            end
-
-            local delta = input.Position - dragStart
-            Instance.Position = UDim2.new(
-                startPosition.X.Scale,
-                startPosition.X.Offset + delta.X,
-                startPosition.Y.Scale,
-                startPosition.Y.Offset + delta.Y
-            )
-        end))
-
-        self:GiveSignal(InputService.InputEnded:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.MouseButton1 then
-                dragging = false
-                dragStart = nil
-                startPosition = nil
-            end
-        end))
-    end
-end
-
 -- Linoria owns these tables. Reuse them instead of creating a second registry.
 env.Options = Library.Options or env.Options or {}
 env.Toggles = Library.Toggles or env.Toggles or {}
@@ -2923,8 +2867,148 @@ do
     end
 end
 
--- Keep the upstream Linoria KeybindFrame untouched.
+-- Keybind list: disabled by default, rebuilt from Library.Options, and kept in sync.
+do
+    Library.KeybindListVisible = false
+    Library.KeybindFrame = Library.KeybindFrame or nil
 
+    local function getKeybinds()
+        local result = {}
+        for index, option in pairs(Library.Options or {}) do
+            if type(option) == "table" and option.Type == "KeyPicker" then
+                local key = option.Value
+                if key ~= nil and tostring(key) ~= "" and tostring(key) ~= "Unknown" then
+                    local mode = tostring(option.Mode or "Toggle")
+                    local state = option.Toggled == true
+                    table.insert(result, {
+                        Index = tostring(index),
+                        Name = tostring(option.__AspectSysDisplayName or option.Text or index),
+                        Key = tostring(key),
+                        Mode = mode,
+                        State = state,
+                    })
+                end
+            end
+        end
+        table.sort(result, function(a, b)
+            return a.Name:lower() < b.Name:lower()
+        end)
+        return result
+    end
+
+    function Library:RefreshKeybinds()
+        local frame = self.KeybindFrame
+        if not frame or not frame.Parent then
+            return self
+        end
+
+        for _, child in ipairs(frame:GetChildren()) do
+            if child:IsA("TextLabel") and child.Name ~= "Title" then
+                child:Destroy()
+            end
+        end
+
+        local keybinds = getKeybinds()
+        frame.Size = UDim2.fromOffset(230, 28 + (#keybinds * 20))
+
+        for rowIndex, bind in ipairs(keybinds) do
+            local stateText = bind.Mode == "Toggle" and (bind.State and "ON" or "OFF") or bind.Mode:upper()
+            local row = make("TextLabel", {
+                Name = "Keybind_" .. tostring(rowIndex),
+                BackgroundTransparency = 1,
+                Position = UDim2.fromOffset(8, 22 + ((rowIndex - 1) * 20)),
+                Size = UDim2.new(1, -16, 0, 18),
+                Font = Library.Font,
+                TextColor3 = Library.FontColor,
+                TextSize = 12,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                Text = string.format("%s  [%s]  %s", bind.Name, bind.Key, stateText),
+                ZIndex = 2002,
+                Parent = frame,
+            })
+            pcall(function()
+                Library:AddToRegistry(row, { TextColor3 = "FontColor" }, true)
+            end)
+        end
+
+        return self
+    end
+
+    function Library:SetKeybindListVisibility(visible)
+        self.KeybindListVisible = visible == true
+        if self.__AspectSysNativeKeybindFrame == nil then
+            self.__AspectSysNativeKeybindFrame = rawget(self, "KeybindFrame")
+        end
+        if self.__AspectSysNativeKeybindFrame then
+            self.__AspectSysNativeKeybindFrame.Visible = false
+        end
+        if self.KeybindListVisible and not self.KeybindFrame then
+            self.KeybindFrame = make("Frame", {
+                Name = "LinoriaPlusKeybinds",
+                BackgroundColor3 = Library.MainColor,
+                BorderColor3 = Library.OutlineColor,
+                Size = UDim2.fromOffset(230, 28),
+                Position = UDim2.fromOffset(10, 60),
+                ZIndex = 2000,
+                Parent = Library.ScreenGui,
+            })
+            self.KeybindFrame.Title = make("TextLabel", {
+                Name = "Title",
+                BackgroundTransparency = 1,
+                Position = UDim2.fromOffset(8, 4),
+                Size = UDim2.new(1, -16, 0, 18),
+                Font = Library.Font,
+                TextColor3 = Library.FontColor,
+                TextSize = 13,
+                TextXAlignment = Enum.TextXAlignment.Left,
+                Text = "Keybinds",
+                ZIndex = 2001,
+                Parent = self.KeybindFrame,
+            })
+            pcall(function()
+                Library:AddToRegistry(self.KeybindFrame, {
+                    BackgroundColor3 = "MainColor",
+                    BorderColor3 = "OutlineColor",
+                }, true)
+                Library:AddToRegistry(self.KeybindFrame.Title, {
+                    TextColor3 = "FontColor",
+                }, true)
+            end)
+            if type(self.__AspectSysDrag) == "function" then
+                self.__AspectSysDrag(self.KeybindFrame)
+            end
+        end
+
+        if self.KeybindFrame then
+            self.KeybindFrame.Visible = self.KeybindListVisible
+        end
+        self:RefreshKeybinds()
+        return self
+    end
+
+    function Library:ToggleKeybindList()
+        return self:SetKeybindListVisibility(not self.KeybindListVisible)
+    end
+
+    Library:SetKeybindListVisibility(false)
+
+    if not Library.__AspectSysKeybindRefreshSignal then
+        local timer = 0
+        Library.__AspectSysKeybindRefreshSignal = RunService.Heartbeat:Connect(function(dt)
+            timer = timer + dt
+            if timer < 0.15 then
+                return
+            end
+            timer = 0
+            if Library.KeybindListVisible then
+                pcall(function()
+                    Library:RefreshKeybinds()
+                end)
+            end
+        end)
+        giveSignal(Library.__AspectSysKeybindRefreshSignal)
+    end
+end
 
 -- Keep every registered dependency box synchronized with the controls it watches.
 do
